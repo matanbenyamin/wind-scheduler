@@ -6,15 +6,14 @@ import time
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
-# import firefox options
-from selenium.webdriver.firefox.options import Options
 import re
 import pandas as pd
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
+import pydeck as pdk
 
 # Function to get wind data (place your get_wind_data function here)
-def get_wind_data(driver, date, hour, latlong):
+def get_wind_data(driver, date, hour, latlong, progress_bar, status_text):
     url = f'https://www.windfinder.com/#11/{latlong}/{date}T{hour}Z'
     driver.get(url)
     # Get the dimensions of the webpage
@@ -34,9 +33,9 @@ def get_wind_data(driver, date, hour, latlong):
     # Iterate through each iframe and try to switch to it
     for index, iframe in enumerate(iframes):
         try:
-            print(f"Attempting to switch to iframe {index + 1}")
+            status_text.text(f"Attempting to switch to iframe {index + 1}")
             driver.switch_to.frame(iframe)
-            print(f"Switched to iframe {index + 1}")
+            status_text.text(f"Switched to iframe {index + 1}")
             driver.switch_to.default_content()  # Switch back to the main content after testing
             # look for the element
             elements = driver.find_elements(By.CLASS_NAME, '_3KkQP69rYwNnTAe8GyxgmA')
@@ -45,7 +44,7 @@ def get_wind_data(driver, date, hour, latlong):
             direction = None
             direction_deg = None
             for element in elements:
-                print(element.text)
+                status_text.text(f"Processing element: {element.text}")
                 found = True
                 text = element.text
                 text = re.sub(r'[^\x00-\x7F]+', '', text)
@@ -60,7 +59,7 @@ def get_wind_data(driver, date, hour, latlong):
             if found:
                 break
         except Exception as e:
-            print(f"Could not switch to iframe {index + 1}: {e}")
+            status_text.text(f"Could not switch to iframe {index + 1}: {e}")
 
     return speed, direction, direction_deg
 
@@ -80,6 +79,9 @@ if 'positions' not in st.session_state:
         'vathi': [38.3711, 20.7127]
     }
 
+if 'routes' not in st.session_state:
+    st.session_state.routes = []
+
 # User input for dates
 dates = st.date_input('Select Dates', [])
 if isinstance(dates, tuple):
@@ -87,11 +89,13 @@ if isinstance(dates, tuple):
 else:
     dates = [dates]
 
-# Fixed hours
-hours = ['09:00', '14:00', '17:00']
+# User input for hours
+available_hours = ['09:00', '12:00', '15:00', '18:00', '14:00', '17:00']
+default_hours = ['09:00', '14:00', '17:00']
+hours = st.multiselect('Select Hours', available_hours, default=default_hours)
 
-# Tabs for main content and adding new positions
-tab1, tab2 = st.tabs(["Wind Data", "Add New Position"])
+# Tabs for main content, adding new positions, and managing routes
+tab1, tab2, tab3 = st.tabs(["Wind Data", "Manage Positions", "Manage Routes"])
 
 with tab2:
     st.header("Add New Position")
@@ -108,35 +112,128 @@ with tab2:
         except ValueError:
             st.error("Please enter valid latitude and longitude values.")
 
+    st.header("Remove Position")
+    pos_to_remove = st.selectbox("Select Position to Remove", list(st.session_state.positions.keys()))
+    if st.button("Remove Position"):
+        if pos_to_remove in st.session_state.positions:
+            del st.session_state.positions[pos_to_remove]
+            st.success(f"Removed position {pos_to_remove}")
+
+with tab3:
+    st.header("Manage Routes")
+    for date in dates:
+        st.subheader(f"Route for {date}")
+        from_pos = st.selectbox(f"From (date: {date})", list(st.session_state.positions.keys()), key=f"from_{date}")
+        to_pos = st.selectbox(f"To (date: {date})", list(st.session_state.positions.keys()), key=f"to_{date}")
+        if st.button(f"Save Route for {date}"):
+            st.session_state.routes.append({
+                'date': date,
+                'from': from_pos,
+                'to': to_pos
+            })
+            st.success(f"Route for {date} saved from {from_pos} to {to_pos}")
+
+    # Display saved routes
+    if st.session_state.routes:
+        st.subheader("Saved Routes")
+        for route in st.session_state.routes:
+            st.write(f"{route['date']}: From {route['from']} to {route['to']}")
+
 with tab1:
     # Display current positions
     st.header("Current Positions")
     for pos_name, coords in st.session_state.positions.items():
         st.write(f"{pos_name}: {coords}")
 
+    # Display map with positions and routes
+    st.header("Map of Positions and Routes")
+    map_data = pd.DataFrame([{'lat': coords[0], 'lon': coords[1]} for coords in st.session_state.positions.values()])
+    st.map(map_data)
+
+    if st.session_state.routes:
+        route_data = []
+        for route in st.session_state.routes:
+            from_coords = st.session_state.positions[route['from']]
+            to_coords = st.session_state.positions[route['to']]
+            route_data.append({
+                'date': route['date'],
+                'from_lat': from_coords[0],
+                'from_lon': from_coords[1],
+                'to_lat': to_coords[0],
+                'to_lon': to_coords[1]
+            })
+        route_df = pd.DataFrame(route_data)
+        st.write(route_df)
+
+        # Create map layers for routes with wind speed and direction
+        layers = []
+        for _, row in route_df.iterrows():
+            layers.append(pdk.Layer(
+                "LineLayer",
+                data=pd.DataFrame([{
+                    'source_position': [row['from_lon'], row['from_lat']],
+                    'target_position': [row['to_lon'], row['to_lat']],
+                    'wind_speed': row.get('wind_speed', 0),
+                    'wind_direction_deg': row.get('wind_direction_deg', 0)
+                }]),
+                get_source_position="source_position",
+                get_target_position="target_position",
+                get_color=[255, 0, 0, 160],
+                get_width=5
+            ))
+
+        st.pydeck_chart(pdk.Deck(
+            map_style="mapbox://styles/mapbox/light-v10",
+            initial_view_state=pdk.ViewState(
+                latitude=38.5,
+                longitude=20.7,
+                zoom=8,
+                pitch=50,
+            ),
+            layers=layers
+        ))
+
     # Button to start scraping
     if st.button('Get Wind Data'):
-        webdriver_path = '/opt/homebrew/bin/chromedriver'
+        webdriver_path = ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
         options = Options()
         options.add_argument('--disable-infobars')
         options.add_argument('--headless')
         options.add_argument('--disable-gpu')
         service = Service(webdriver_path)
 
+        total_tasks = len(dates) * len(hours) * len(st.session_state.positions)
+        progress_bar = st.progress(0)
+        progress = 0
+        status_text = st.empty()
 
         output = pd.DataFrame(columns=['pos', 'date', 'hour', 'speed', 'direction', 'direction_deg'])
         for date in dates:
             for hour in hours:
                 for pos, coords in st.session_state.positions.items():
-                    driver = webdriver.Firefox(options=options)
-                    st.write(f'Getting data for {pos} {date} at {hour}')
+                    driver = webdriver.Chrome(service=service, options=options)
+                    status_text.text(f'Getting data for {pos} {date} at {hour}')
                     latlong = str(coords[0]) + '/' + str(coords[1])
-                    data = get_wind_data(driver, date, hour, latlong)
+                    data = get_wind_data(driver, date, hour, latlong, progress_bar, status_text)
                     output = pd.concat([output, pd.DataFrame(
                         {'pos': pos, 'date': date, 'hour': hour, 'speed': data[0], 'direction': data[1],
                          'direction_deg': data[2]}, index=[0])])
-                    output.to_csv('wind_data.csv', index=False)
+                    progress += 1
+                    progress_bar.progress(progress / total_tasks)
                     driver.quit()
 
         # Display the results
         st.write(output)
+
+        # Update route data with wind information
+        for route in st.session_state.routes:
+            from_coords = st.session_state.positions[route['from']]
+            latlong_from = f"{from_coords[0]}/{from_coords[1]}"
+            for hour in hours:
+                wind_speed, wind_direction, wind_direction_deg = get_wind_data(driver, route['date'], hour, latlong_from, progress_bar, status_text)
+                route['wind_speed'] = wind_speed
+                route['wind_direction'] = wind_direction
+                route['wind_direction_deg'] = wind_direction_deg
+
+        route_df = pd.DataFrame(route_data)
+        st.write(route_df)
