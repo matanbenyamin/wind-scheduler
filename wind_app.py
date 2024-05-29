@@ -6,6 +6,8 @@ import time
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
+# import firefox options
+from selenium.webdriver.firefox.options import Options
 import re
 import pandas as pd
 from webdriver_manager.chrome import ChromeDriverManager
@@ -121,14 +123,12 @@ with tab1:
         options.add_argument('--disable-gpu')
         service = Service(webdriver_path)
 
-        # install the chromedriver
-        driver = webdriver.Chrome(options=options)
 
         output = pd.DataFrame(columns=['pos', 'date', 'hour', 'speed', 'direction', 'direction_deg'])
         for date in dates:
             for hour in hours:
                 for pos, coords in st.session_state.positions.items():
-                    driver = webdriver.Chrome(options=options)
+                    driver = webdriver.Firefox(options=options)
                     st.write(f'Getting data for {pos} {date} at {hour}')
                     latlong = str(coords[0]) + '/' + str(coords[1])
                     data = get_wind_data(driver, date, hour, latlong)
