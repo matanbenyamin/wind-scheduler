@@ -1,65 +1,75 @@
 import streamlit as st
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
 import time
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.common.action_chains import ActionChains
 import re
 import pandas as pd
-from webdriver_manager.chrome import ChromeDriverManager
-from webdriver_manager.core.os_manager import ChromeType
+from webdriver_manager.firefox import GeckoDriverManager
 import pydeck as pdk
+import numpy as np
 
-# Function to get wind data (place your get_wind_data function here)
-def get_wind_data(driver, date, hour, latlong, progress_bar, status_text):
-    url = f'https://www.windfinder.com/#11/{latlong}/{date}T{hour}Z'
-    driver.get(url)
-    # Get the dimensions of the webpage
-    window_size = driver.get_window_size()
-    width = window_size['width']
-    height = window_size['height']
-    # Calculate the center coordinates
-    center_x = width // 2
-    center_y = height // 3
-    # Perform the mouse click in the center of the webpage
-    actions = ActionChains(driver)
-    actions.move_by_offset(center_x, center_y).click().perform()
-    time.sleep(3)
-    # Find all iframes on the page
-    iframes = driver.find_elements(By.TAG_NAME, 'iframe')
-    found = False
-    # Iterate through each iframe and try to switch to it
-    for index, iframe in enumerate(iframes):
-        try:
-            status_text.text(f"Attempting to switch to iframe {index + 1}")
-            driver.switch_to.frame(iframe)
-            status_text.text(f"Switched to iframe {index + 1}")
-            driver.switch_to.default_content()  # Switch back to the main content after testing
-            # look for the element
-            elements = driver.find_elements(By.CLASS_NAME, '_3KkQP69rYwNnTAe8GyxgmA')
 
-            speed = None
-            direction = None
-            direction_deg = None
-            for element in elements:
-                status_text.text(f"Processing element: {element.text}")
-                found = True
-                text = element.text
-                text = re.sub(r'[^\x00-\x7F]+', '', text)
+# Function to get wind data
+def get_wind_data(date, hour, latlong, progress_bar, status_text):
+    options = FirefoxOptions()
+    options.add_argument('--headless')
+    options.add_argument('--disable-gpu')
+    service = FirefoxService(executable_path=GeckoDriverManager().install())
 
-                # structure the data - if (str) its a direction, if kts in text its strnegth
-                if 'kts' in element.text:
-                    # format utf-8
-                    speed = int(text.split('kts')[0])
-                if '°' in element.text:
-                    direction_deg = int(element.text.split('°')[0])
-                    direction = text.split('(')[1][:-1]
-            if found:
-                break
-        except Exception as e:
-            status_text.text(f"Could not switch to iframe {index + 1}: {e}")
+    driver = webdriver.Firefox(service=service, options=options)
+
+    try:
+        url = f'https://www.windfinder.com/#11/{latlong}/{date}T{hour}Z'
+        driver.get(url)
+        # Get the dimensions of the webpage
+        window_size = driver.get_window_size()
+        width = window_size['width']
+        height = window_size['height']
+        # Calculate the center coordinates
+        center_x = width // 2
+        center_y = height // 3
+        # Perform the mouse click in the center of the webpage
+        actions = ActionChains(driver)
+        actions.move_by_offset(center_x, center_y).click().perform()
+        time.sleep(3)
+        # Find all iframes on the page
+        iframes = driver.find_elements(By.TAG_NAME, 'iframe')
+        found = False
+        # Iterate through each iframe and try to switch to it
+        for index, iframe in enumerate(iframes):
+            try:
+                status_text.text(f"Attempting to switch to iframe {index + 1}")
+                driver.switch_to.frame(iframe)
+                status_text.text(f"Switched to iframe {index + 1}")
+                driver.switch_to.default_content()  # Switch back to the main content after testing
+                # look for the element
+                elements = driver.find_elements(By.CLASS_NAME, '_3KkQP69rYwNnTAe8GyxgmA')
+
+                speed = None
+                direction = None
+                direction_deg = None
+                for element in elements:
+                    status_text.text(f"Processing element: {element.text}")
+                    found = True
+                    text = element.text
+                    text = re.sub(r'[^\x00-\x7F]+', '', text)
+
+                    # structure the data - if (str) its a direction, if kts in text its strnegth
+                    if 'kts' in element.text:
+                        # format utf-8
+                        speed = int(text.split('kts')[0])
+                    if '°' in element.text:
+                        direction_deg = int(element.text.split('°')[0])
+                        direction = text.split('(')[1][:-1]
+                if found:
+                    break
+            except Exception as e:
+                status_text.text(f"Could not switch to iframe {index + 1}: {e}")
+    finally:
+        driver.quit()
 
     return speed, direction, direction_deg
 
@@ -160,80 +170,99 @@ with tab1:
                 'from_lat': from_coords[0],
                 'from_lon': from_coords[1],
                 'to_lat': to_coords[0],
-                'to_lon': to_coords[1]
+                'to_lon': to_coords[1],
+                'wind_speed': 0,  # Placeholder for wind speed
+                'wind_direction_deg': 0  # Placeholder for wind direction degree
             })
         route_df = pd.DataFrame(route_data)
         st.write(route_df)
 
-        # Create map layers for routes with wind speed and direction
-        layers = []
-        for _, row in route_df.iterrows():
-            layers.append(pdk.Layer(
-                "LineLayer",
-                data=pd.DataFrame([{
-                    'source_position': [row['from_lon'], row['from_lat']],
-                    'target_position': [row['to_lon'], row['to_lat']],
-                    'wind_speed': row.get('wind_speed', 0),
-                    'wind_direction_deg': row.get('wind_direction_deg', 0)
-                }]),
-                get_source_position="source_position",
-                get_target_position="target_position",
-                get_color=[255, 0, 0, 160],
-                get_width=5
+        # Button to start scraping
+        if st.button('Get Wind Data'):
+            total_tasks = len(dates) * len(hours) * len(route_df)
+            progress_bar = st.progress(0)
+            progress = 0
+            status_text = st.empty()
+
+            output = pd.DataFrame(columns=['pos', 'date', 'hour', 'speed', 'direction', 'direction_deg'])
+            for date in dates:
+                for hour in hours:
+                    for pos, coords in st.session_state.positions.items():
+                        status_text.text(f'Getting data for {pos} {date} at {hour}')
+                        latlong = str(coords[0]) + '/' + str(coords[1])
+                        data = get_wind_data(date, hour, latlong, progress_bar, status_text)
+                        output = pd.concat([output, pd.DataFrame(
+                            {'pos': pos, 'date': date, 'hour': hour, 'speed': data[0], 'direction': data[1],
+                             'direction_deg': data[2]}, index=[0])])
+                        progress += 1
+                        progress_bar.progress(progress / total_tasks)
+
+            # Display the results
+            st.write(output)
+
+            # Update route data with wind information
+            for i, route in enumerate(route_data):
+                latlong_from = f"{route['from_lat']}/{route['from_lon']}"
+                wind_speed, wind_direction, wind_direction_deg = get_wind_data(route['date'], hours[0], latlong_from,
+                                                                               progress_bar, status_text)
+                route_data[i]['wind_speed'] = wind_speed
+                route_data[i]['wind_direction_deg'] = wind_direction_deg
+
+            route_df = pd.DataFrame(route_data)
+            st.write(route_df)
+
+            # Create map layers for routes with wind speed and direction
+            layers = []
+            for _, row in route_df.iterrows():
+                arrow_length = 0.01  # Length of the arrow
+                direction_rad = row['wind_direction_deg'] * (3.14159265 / 180)  # Convert to radians
+                layers.append(pdk.Layer(
+                    "PathLayer",
+                    data=pd.DataFrame([{
+                        'path': [
+                            [row['from_lon'], row['from_lat']],
+                            [row['from_lon'] + arrow_length * np.cos(direction_rad),
+                             row['from_lat'] + arrow_length * np.sin(direction_rad)]
+                        ],
+                        'wind_speed': row['wind_speed']
+                    }]),
+                    get_path='path',
+                    get_width=2,
+                    get_color=[0, 0, 255],
+                    pickable=True,
+                ))
+                layers.append(pdk.Layer(
+                    "TextLayer",
+                    data=pd.DataFrame([{
+                        'coordinates': [row['from_lon'], row['from_lat']],
+                        'text': f"{row['wind_speed']} kts"
+                    }]),
+                    get_position="coordinates",
+                    get_text="text",
+                    get_size=16,
+                    get_color=[0, 0, 0],
+                    get_alignment_baseline="'bottom'",
+                ))
+                layers.append(pdk.Layer(
+                    "TextLayer",
+                    data=pd.DataFrame([{
+                        'coordinates': [row['to_lon'], row['to_lat']],
+                        'text': f"{row['wind_speed']} kts"
+                    }]),
+                    get_position="coordinates",
+                    get_text="text",
+                    get_size=16,
+                    get_color=[0, 0, 0],
+                    get_alignment_baseline="'bottom'",
+                ))
+
+            st.pydeck_chart(pdk.Deck(
+                map_style="mapbox://styles/mapbox/light-v10",
+                initial_view_state=pdk.ViewState(
+                    latitude=38.5,
+                    longitude=20.7,
+                    zoom=8,
+                    pitch=50,
+                ),
+                layers=layers
             ))
-
-        st.pydeck_chart(pdk.Deck(
-            map_style="mapbox://styles/mapbox/light-v10",
-            initial_view_state=pdk.ViewState(
-                latitude=38.5,
-                longitude=20.7,
-                zoom=8,
-                pitch=50,
-            ),
-            layers=layers
-        ))
-
-    # Button to start scraping
-    if st.button('Get Wind Data'):
-        webdriver_path = ChromeDriverManager(chrome_type=ChromeType.GOOGLE).install()
-        options = Options()
-        options.add_argument('--disable-infobars')
-        options.add_argument('--headless')
-        options.add_argument('--disable-gpu')
-        service = Service(webdriver_path)
-
-        total_tasks = len(dates) * len(hours) * len(st.session_state.positions)
-        progress_bar = st.progress(0)
-        progress = 0
-        status_text = st.empty()
-
-        output = pd.DataFrame(columns=['pos', 'date', 'hour', 'speed', 'direction', 'direction_deg'])
-        for date in dates:
-            for hour in hours:
-                for pos, coords in st.session_state.positions.items():
-                    driver = webdriver.Chrome(service=service, options=options)
-                    status_text.text(f'Getting data for {pos} {date} at {hour}')
-                    latlong = str(coords[0]) + '/' + str(coords[1])
-                    data = get_wind_data(driver, date, hour, latlong, progress_bar, status_text)
-                    output = pd.concat([output, pd.DataFrame(
-                        {'pos': pos, 'date': date, 'hour': hour, 'speed': data[0], 'direction': data[1],
-                         'direction_deg': data[2]}, index=[0])])
-                    progress += 1
-                    progress_bar.progress(progress / total_tasks)
-                    driver.quit()
-
-        # Display the results
-        st.write(output)
-
-        # Update route data with wind information
-        for route in st.session_state.routes:
-            from_coords = st.session_state.positions[route['from']]
-            latlong_from = f"{from_coords[0]}/{from_coords[1]}"
-            for hour in hours:
-                wind_speed, wind_direction, wind_direction_deg = get_wind_data(driver, route['date'], hour, latlong_from, progress_bar, status_text)
-                route['wind_speed'] = wind_speed
-                route['wind_direction'] = wind_direction
-                route['wind_direction_deg'] = wind_direction_deg
-
-        route_df = pd.DataFrame(route_data)
-        st.write(route_df)
