@@ -8,7 +8,8 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.action_chains import ActionChains
 import re
 import pandas as pd
-
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 
 # Function to get wind data (place your get_wind_data function here)
 def get_wind_data(driver, date, hour, latlong):
@@ -114,17 +115,20 @@ with tab1:
     # Button to start scraping
     if st.button('Get Wind Data'):
         webdriver_path = '/opt/homebrew/bin/chromedriver'
-        user_data_dir = '/Users/matanb/Library/Application Support/Google/Chrome'
         options = Options()
         options.add_argument('--disable-infobars')
         options.add_argument('--headless')
+        options.add_argument('--disable-gpu')
         service = Service(webdriver_path)
+
+        # install the chromedriver
+        driver = webdriver.Chrome(options=options)
 
         output = pd.DataFrame(columns=['pos', 'date', 'hour', 'speed', 'direction', 'direction_deg'])
         for date in dates:
             for hour in hours:
                 for pos, coords in st.session_state.positions.items():
-                    driver = webdriver.Chrome(service=service, options=options)
+                    driver = webdriver.Chrome(options=options)
                     st.write(f'Getting data for {pos} {date} at {hour}')
                     latlong = str(coords[0]) + '/' + str(coords[1])
                     data = get_wind_data(driver, date, hour, latlong)
