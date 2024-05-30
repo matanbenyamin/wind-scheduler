@@ -2,4 +2,5 @@ streamlit
 seleniumbase
 webdriver-manager
 pandas
-
+folium
+streamlit-folium
