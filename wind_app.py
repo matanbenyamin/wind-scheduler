@@ -78,7 +78,7 @@ def get_wind_data(lat, lon, date, hour, progress_bar, status_text):
 
 
 # Streamlit app
-st.title("Wind Data Finder")
+st.title("Wind Data Finder v2")
 
 # Initialize session state for selected positions if not already done
 if 'selected_positions' not in st.session_state:
